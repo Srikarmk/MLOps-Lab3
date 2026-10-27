@@ -1,3 +1,23 @@
+# MLflow Lab: Wine Quality Prediction
+
+> **Running this version.** The original lab below is a Databricks-style notebook (`starter.ipynb`). It is ported here to plain Python scripts in `src/` that run against a local MLflow tracking server, without Spark.
+>
+> ```sh
+> python3.12 -m venv .venv && source .venv/bin/activate
+> pip install -r requirements.txt
+>
+> # terminal 1: tracking server + UI at http://127.0.0.1:8080
+> mlflow server --backend-store-uri sqlite:///mlflow.db --artifacts-destination ./mlartifacts --host 127.0.0.1 --port 8080
+>
+> # terminal 2
+> cd src
+> python train_baseline.py                 # random forest baseline
+> python register_model.py baseline        # register it as wine_quality v1 -> Production
+> python tune_xgboost.py --max-evals 32    # hyperopt sweep, one child run per trial
+> python register_model.py best-xgboost    # register the best trial, archive the old version
+> python batch_inference.py                # score the test set with the Production model
+> ```
+
 # Wine Quality Prediction Lab Documentation
 
 This documentation provides a step-by-step guide to a data science lab focused on predicting wine quality using Python. The lab covers data preprocessing, model training, model registration, and batch inference using MLflow and various machine learning libraries.

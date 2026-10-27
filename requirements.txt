@@ -1,10 +1,7 @@
-mlflow
-scikit-learn
-hyperopt
-pandas
-numpy
-seaborn
-matplotlib
-xgboost==1.7.6
-pyspark
-ipykernel
+mlflow==3.17.1
+scikit-learn==1.9.1
+xgboost==3.4.1
+hyperopt==0.3.0
+pandas==3.0.6
+numpy==2.5.4
+matplotlib==3.11.2
