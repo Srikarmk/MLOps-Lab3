@@ -10,6 +10,7 @@ from sklearn.metrics import roc_auc_score
 
 from common import connect
 from data import load_wine_data, split
+from tracking import log_datasets, set_run_tags
 
 SEARCH_SPACE = {
     "max_depth": scope.int(hp.quniform("max_depth", 4, 100, 1)),
@@ -29,6 +30,7 @@ def make_objective(X_train, y_train, X_val, y_val):
     def train_model(params):
         mlflow.xgboost.autolog(log_models=False, silent=True)
         with mlflow.start_run(nested=True):
+            set_run_tags(pipeline_step="tuning_trial", model_family="xgboost")
             booster = xgb.train(
                 params=params,
                 dtrain=train,
@@ -41,7 +43,7 @@ def make_objective(X_train, y_train, X_val, y_val):
             mlflow.log_metric("auc", auc)
 
             signature = infer_signature(X_train, booster.predict(train))
-            mlflow.xgboost.log_model(booster, name="model", signature=signature)
+            mlflow.xgboost.log_model(booster, name="model", signature=signature, input_example=X_train.head(5))
         return {"status": STATUS_OK, "loss": -auc}
 
     return train_model
@@ -57,6 +59,8 @@ def main():
 
     # Each trial becomes a child run of this parent run
     with mlflow.start_run(run_name="xgboost_models"):
+        set_run_tags(pipeline_step="tuning", model_family="xgboost")
+        log_datasets(training=(X_train, y_train), validation=(X_val, y_val))
         fmin(
             fn=make_objective(X_train, y_train, X_val, y_val),
             space=SEARCH_SPACE,

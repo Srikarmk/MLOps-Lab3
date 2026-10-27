@@ -1,9 +1,12 @@
+import hashlib
 from pathlib import Path
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_FILES = ["winequality-red.csv", "winequality-white.csv"]
+TARGET = "quality"
 RANDOM_STATE = 123
 
 
@@ -19,7 +22,19 @@ def load_wine_data():
 
     # A wine is "high quality" if it scored 7 or more
     data["quality"] = (data["quality"] >= 7).astype(int)
+
+    # Store every feature as float so the logged model schema accepts missing values at inference time
+    features = data.columns.drop("quality")
+    data[features] = data[features].astype("float64")
     return data
+
+
+def data_version():
+    """Short SHA-256 over the raw CSVs, logged as a tag so every run records exactly which data it saw."""
+    digest = hashlib.sha256()
+    for name in DATA_FILES:
+        digest.update((DATA_DIR / name).read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def split(data):
