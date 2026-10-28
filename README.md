@@ -1,476 +1,267 @@
 # MLflow Lab: Wine Quality Prediction
 
-> **Running this version.** The original lab below is a Databricks-style notebook (`starter.ipynb`). It is ported here to plain Python scripts in `src/` that run against a local MLflow tracking server, without Spark.
->
-> ```sh
-> python3.12 -m venv .venv && source .venv/bin/activate
-> pip install -r requirements.txt
->
-> # terminal 1: tracking server + UI at http://127.0.0.1:8080
-> mlflow server --backend-store-uri sqlite:///mlflow.db --artifacts-destination ./mlartifacts --host 127.0.0.1 --port 8080
->
-> # terminal 2
-> cd src
-> python train_baseline.py                 # random forest baseline
-> python register_model.py baseline        # register it; becomes @champion if it beats the current one
-> python tune_xgboost.py --max-evals 32    # hyperopt sweep, one child run per trial
-> python register_model.py best-xgboost    # register the sweep's best model, same promotion check
-> python register_model.py status          # versions and their @champion / @challenger aliases
-> python batch_inference.py                # score the test set with models:/wine_quality@champion
->
-> # terminal 3: REST endpoint for @champion at http://127.0.0.1:5001/invocations
-> ./serve_model.sh
->
-> # back in terminal 2
-> python score_endpoint.py                 # served predictions must match the model loaded locally
-> ```
+This lab trains a model to predict whether a wine is high quality (score of 7 or more) from 11 chemical measurements, using the [UCI Wine Quality](https://archive.ics.uci.edu/dataset/186/wine+quality) red and white datasets. The focus is MLflow: tracking experiments, tuning with nested runs, managing a model registry, batch inference and serving the model over REST.
 
-# Wine Quality Prediction Lab Documentation
+It is based on the course's MLflow Lab2 (`starter.ipynb`, a Databricks notebook that needs Spark). The original write-up is kept unchanged in [ORIGINAL_LAB.md](ORIGINAL_LAB.md), along with the original notebook and PDF. This version runs locally with no Spark or Databricks. It replaces the deprecated registry stages with aliases and an automatic promotion check, and it verifies the served model. [What changed](#what-changed-from-the-original-lab) lists every change.
 
-This documentation provides a step-by-step guide to a data science lab focused on predicting wine quality using Python. The lab covers data preprocessing, model training, model registration, and batch inference using MLflow and various machine learning libraries.
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+- [Run the whole lab in one command](#run-the-whole-lab-in-one-command)
+- [Run it step by step](#run-it-step-by-step)
+- [What a successful run looks like](#what-a-successful-run-looks-like)
+- [What changed from the original lab](#what-changed-from-the-original-lab)
+- [Project layout](#project-layout)
+- [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 
-Before starting the lab, ensure that you have the following:
+You need three things: Git, curl, and **Python 3.12 or 3.13**. Python 3.12 is the minimum because numpy 2.5 and xgboost 3.4 require it. The lab was tested on Python 3.12.15 and 3.13.16. Java, Spark, Docker and conda are **not** needed.
 
-- Python environment set up with required libraries installed.
-- Datasets: You will need two CSV files, `winequality-white.csv` and `winequality-red.csv`, containing white and red wine data, respectively.
+**Python**
 
-## Step 1: Importing Data
+| OS | Install |
+|---|---|
+| macOS | Install [Homebrew](https://brew.sh), then `brew install python@3.12` |
+| Ubuntu 24.04 / Debian | `sudo apt update && sudo apt install -y python3.12 python3.12-venv git curl` |
+| Windows 10/11 | `winget install Python.Python.3.12`, or the installer from [python.org](https://www.python.org/downloads/) (tick "Add python.exe to PATH") |
+| Any OS, with [uv](https://docs.astral.sh/uv/) | `uv python install 3.12` |
 
-In this step, we load the white and red wine datasets using the Pandas library.
-
-```python
-import pandas as pd
-
-# Load white wine data
-white_wine = pd.read_csv("data/winequality-white.csv", sep=";")
-
-# Load red wine data
-red_wine = pd.read_csv("data/winequality-red.csv", sep=",")
-```
-
-## Step 2: Exploring Data
-
-In this step, we'll explore the wine dataset by examining the first few rows of both the white and red wine datasets.
-
-### Code:
-
-```python
-white_wine.head()
-red_wine.head()
-```
-
-## Step 3: Data Preprocessing
-
-In this step, we'll perform data preprocessing tasks to prepare the wine dataset for model training.
-
-### Adding Indicator Variable
-
-We add an indicator variable 'is_red' to both datasets to distinguish between white and red wines.
-
-### Code:
-
-```python
-red_wine['is_red'] = 1
-white_wine['is_red'] = 0
-
-data = pd.concat([red_wine, white_wine], axis=0)
-
-# Remove spaces from column names
-data.rename(columns=lambda x: x.replace(' ', '_'), inplace=True)
-```
-
-## Step 4: Data Visualization
-
-In this step, we'll visualize the distribution of the 'quality' variable in the wine dataset.
-
-### Code:
-
-```python
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-sns.distplot(data.quality, kde=False);
-```
-
-
-## Step 5: Define High-Quality Wines
-
-In this step, we'll define what constitutes a "high-quality" wine based on a quality score threshold.
-
-### Code:
-
-```python
-high_quality = (data.quality >= 7).astype(int)
-data.quality = high_quality
-```
-
-### Explanation:
-We create a new binary column high_quality in the data DataFrame.
-A wine is considered "high quality" if its 'quality' score is greater than or equal to 7.
-We use (data.quality >= 7) to create a boolean mask and then convert it to integers (astype(int)) to represent high-quality wines as 1 and others as 0.
-The original 'quality' column is updated with these new values.
-Expected Output:
-The data DataFrame will have a new 'quality' column indicating whether each wine is of high quality (1) or not (0).
-
-
-
-## Step 6: Exploratory Data Analysis (EDA)
-
-In this step, we'll perform Exploratory Data Analysis (EDA) by creating box plots to identify potential predictors of wine quality.
-
-### Code:
-
-```python
-import matplotlib.pyplot as plt
-
-dims = (3, 4)
-f, axes = plt.subplots(dims[0], dims[1], figsize=(25, 15))
-axis_i, axis_j = 0, 0
-
-for col in data.columns:
-    if col == 'is_red' or col == 'quality':
-        continue  # Box plots cannot be used on indicator variables
-    sns.boxplot(x=high_quality, y=data[col], ax=axes[axis_i, axis_j])
-    axis_j += 1
-    if axis_j == dims[1]:
-        axis_i += 1
-        axis_j = 0
-```
-
-## Step 7: Checking for Missing Data
-
-In this step, we'll check for missing data within the wine dataset.
-
-### Code:
-
-```python
-data.isna().any()
-```
-
-
-## Step 8: Data Splitting
-
-In this step, we'll split the dataset into training, validation, and test sets to prepare for model training and evaluation.
-
-### Code:
-
-```python
-from sklearn.model_selection import train_test_split
-
-X = data.drop(["quality"], axis=1)
-y = data.quality
-
-# Split out the training data
-X_train, X_rem, y_train, y_rem = train_test_split(X, y, train_size=0.6, random_state=123)
-
-# Split the remaining data equally into validation and test
-X_val, X_test, y_val, y_test = train_test_split(X_rem, y_rem, test_size=0.5, random_state=123)
-```
-
-## Step 9: Building a Baseline Model
-
-In this step, we'll create a baseline model using a random forest classifier and log its performance using MLflow.
-
-### Code:
-
-```python
-import mlflow
-import mlflow.pyfunc
-import mlflow.sklearn
-import numpy as np
-import sklearn
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score
-from mlflow.models.signature import infer_signature
-from mlflow.utils.environment import _mlflow_conda_env
-import cloudpickle
-import time
-
-# The predict method of sklearn's RandomForestClassifier returns a binary classification (0 or 1).
-# The following code creates a wrapper function, SklearnModelWrapper, that uses 
-# the predict_proba method to return the probability that the observation belongs to each class.
-
-class SklearnModelWrapper(mlflow.pyfunc.PythonModel):
-    def __init__(self, model):
-        self.model = model
-
-    def predict(self, context, model_input):
-        return self.model.predict_proba(model_input)[:,1]
-
-# mlflow.start_run creates a new MLflow run to track the performance of this model. 
-# Within the context, you call mlflow.log_param to keep track of the parameters used, and
-# mlflow.log_metric to record metrics like accuracy.
-
-with mlflow.start_run(run_name='untuned_random_forest'):
-    n_estimators = 10
-    model = RandomForestClassifier(n_estimators=n_estimators, random_state=np.random.RandomState(123))
-    model.fit(X_train, y_train)
-
-    # predict_proba returns [prob_negative, prob_positive], so slice the output with [:, 1]
-    predictions_test = model.predict_proba(X_test)[:,1]
-    auc_score = roc_auc_score(y_test, predictions_test)
-    mlflow.log_param('n_estimators', n_estimators)
-    # Use the area under the ROC curve as a metric.
-    mlflow.log_metric('auc', auc_score)
-    wrappedModel = SklearnModelWrapper(model)
-    # Log the model with a signature that defines the schema of the model's inputs and outputs. 
-    # When the model is deployed, this signature will be used to validate inputs.
-    signature = infer_signature(X_train, wrappedModel.predict(None, X_train))
-
-    # MLflow contains utilities to create a conda environment used to serve models.
-    # The necessary dependencies are added to a conda.yaml file which is logged along with the model.
-    conda_env =  _mlflow_conda_env(
-            additional_conda_deps=None,
-            additional_pip_deps=["cloudpickle=={}".format(cloudpickle.__version__), "scikit-learn=={}".format(sklearn.__version__)],
-            additional_conda_channels=None,
-        )
-    mlflow.pyfunc.log_model("random_forest_model",
-                            python_model=wrappedModel,
-                            conda_env=conda_env,
-                            signature=signature)
-
-```
-
-### Explanation:
-We create a random forest classifier model using scikit-learn's RandomForestClassifier.
-The model is trained on the training data (X_train, y_train).
-We log various information using MLflow, including model parameters (n_estimators), the Area Under the ROC Curve (AUC) metric, and the model itself.
-A wrapper class SklearnModelWrapper is used to make predictions using predict_proba, which returns class probabilities.
-We also define a signature to validate inputs when the model is deployed.
-Expected Output:
-Model training details and metrics (e.g., AUC) will be logged in the MLflow run.
-The trained model will be saved for future use.
-
-
-## Step 10: Feature Importance Analysis
-
-In this step, we analyze feature importance to identify which features have the most impact on predicting wine quality.
-
-### Code:
-
-```python
-feature_importances = pd.DataFrame(model.feature_importances_, index=X_train.columns.tolist(), columns=['importance'])
-feature_importances.sort_values('importance', ascending=False)
-```
-
-### Explanation:
-We calculate the feature importances using the trained random forest classifier model.
-The model.feature_importances_ attribute provides the importance scores for each feature.
-We create a DataFrame feature_importances to display the importances along with feature names.
-Finally, we sort the DataFrame in descending order to identify the most important features.
-Expected Output:
-The output will be a table showing the feature importances in descending order, with the most important features at the top.
-
-
-
-## Step 11: Model Registration in MLflow Model Registry
-
-In this step, we'll register the trained model in the MLflow Model Registry for version tracking and management.
-
-### Code:
-
-```python
-run_id = mlflow.search_runs(filter_string='tags.mlflow.runName = "untuned_random_forest"').iloc[0].run_id
-model_name = "wine_quality"
-model_version = mlflow.register_model(f"runs:/{run_id}/random_forest_model", model_name)
-
-# Registering the model takes a few seconds, so add a small delay
-time.sleep(15)
-```
-
-### Explanation:
-We retrieve the run ID of the MLflow run where the model was trained using mlflow.search_runs.
-We specify the desired model name, in this case, "wine_quality."
-We use mlflow.register_model to register the model in the Model Registry. The path to the model is constructed using the run ID.
-A delay is added to ensure the model registration process is completed.
-Expected Output:
-The trained model will be registered in the MLflow Model Registry under the specified model name ("wine_quality").
-
-### Note:
-Model registration in the MLflow Model Registry allows for versioning and tracking of different model versions. It's a crucial step for managing and deploying machine learning models in a production environment.
-
-## Step 12: Transitioning Model Version to Production
-
-In this step, we'll transition the newly registered model version to the "Production" stage in the MLflow Model Registry.
-
-### Code:
-
-```python
-from mlflow.tracking import MlflowClient
-
-client = MlflowClient()
-client.transition_model_version_stage(
-  name=model_name,
-  version=model_version.version,
-  stage="Production",
-)
-```
-
-### Explanation:
-We use the MlflowClient to interact with the MLflow Tracking Server programmatically.
-The client.transition_model_version_stage method is used to transition the model version to the "Production" stage.
-Expected Output:
-The model version will be moved to the "Production" stage in the MLflow Model Registry.
-
-### Note:
-Transitioning a model version to "Production" indicates that it is ready for use in a production environment. You can now refer to the model using the path "models:/wine_quality/production." This step is crucial for managing the deployment of machine learning models.
-
-
-## Step 13: Model Inference and Evaluation
-
-In this step, we'll load the production version of the model from the MLflow Model Registry and perform batch inference and evaluation.
-
-### Code:
-
-```python
-model = mlflow.pyfunc.load_model(f"models:/{model_name}/production")
-
-# Sanity-check: This should match the AUC logged by MLflow
-print(f'AUC: {roc_auc_score(y_test, model.predict(X_test))}')
-
-```
-
-### Explanation:
-We load the production version of the model from the MLflow Model Registry using mlflow.pyfunc.load_model.
-We perform batch inference on the test data (X_test) using the loaded model.
-We calculate and print the Area Under the ROC Curve (AUC) score to assess the model's performance.
-Expected Output:
-The AUC score will be printed, providing an evaluation of the model's performance on the test data.
-
-### Note:
-Loading the production model version allows us to make predictions on new data.
-The AUC score is used here as an example metric for model evaluation. Depending on the problem, other evaluation metrics may be more appropriate.
-
-## Step 14: Batch Inference with the Deployed Model
-
-In this step, we'll perform batch inference using the deployed model to make predictions on a dataset stored in a Delta table.
-
-### Code:
-
-```python
-import mlflow.pyfunc
-
-apply_model_udf = mlflow.pyfunc.spark_udf(spark, f"models:/{model_name}/production")
-new_data = spark.read.format("csv").load(table_path)
-
-# Apply the model to the new data
-predictions = new_data.withColumn("prediction", apply_model_udf(*new_data.columns))
-
-```
-
-### Explanation:
-We use the mlflow.pyfunc.spark_udf function to create a Spark User-Defined Function (UDF) that applies the deployed production model to the input data.
-We read the new data from a Delta table using spark.read.format("csv").load(table_path).
-We apply the model to the new data using the UDF and create a new DataFrame predictions that includes the predictions.
-Expected Output:
-The predictions DataFrame will contain the input data along with a new column "prediction" that contains the model's predictions.
-
-### Note:
-Batch inference is the process of using a trained machine learning model to make predictions on a batch of data. In this step, we apply the deployed model to new data stored in a Delta table to make predictions at scale.
-
-
-## Step 15: Batch Inference Result Verification
-
-In this step, we'll verify and inspect the results of the batch inference performed using the deployed model.
-
-### Code:
-
-```python
-predictions.show()
-```
-
-## Step 16: Serving the Model for Real-Time Inference
-
-In this step, we'll serve the model to enable real-time inference using MLflow's model serving capabilities.
-
-### Code (Command Line):
+Check it:
 
 ```bash
-# Serve the model using the MLflow Model Serving
-mlflow models serve -m models:/${model_name}/production -h 0.0.0.0 -p 5001
+python3.12 --version
 ```
 
-### Explanation:
-We use the mlflow models serve command to start serving the model.
+This should print `Python 3.12.x`. On Windows, run `py -3.12 --version` instead.
+
+**Git and curl:** both come with macOS (if they're missing, `xcode-select --install` adds Git). On Windows, Git comes from `winget install Git.Git`, and curl ships with Windows 10 and later.
+
+**Python packages.** These are pinned in `requirements.txt` and installed in [Setup](#setup):
+
+| Package | Version | Used for |
+|---|---|---|
+| mlflow | 3.17.1 | tracking server, registry, serving |
+| scikit-learn | 1.9.1 | random forest baseline, metrics, data split |
+| xgboost | 3.4.1 | tuned model |
+| hyperopt | 0.3.0 | TPE hyperparameter search |
+| pandas | 3.0.6 | data loading |
+| numpy | 2.5.4 | arrays, seeding |
+| matplotlib | 3.11.2 | plots logged to MLflow |
+| joblib | 1.6.0 | saving the random forest inside its MLflow model |
+| requests | 2.34.2 | REST client for the served model |
+
+## Setup
 
 ```bash
--m models:/${model_name}/production specifies the model to be served. Adjust the path accordingly to match your model name and stage.
--h 0.0.0.0 specifies the host on which the model will be served.
--p 5001 specifies the port on which the model will be available for real-time inference.
+git clone https://github.com/Srikarmk/MLOps-Lab3.git
+cd MLOps-Lab3
+
+python3.12 -m venv .venv
+source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-### Expected Output:
-The model will be served and ready to accept real-time inference requests.
+Check the install:
 
-### Note:
-Serving a model allows you to make real-time predictions by sending requests to the model's API endpoint.
-Ensure that the MLflow Model Server is correctly configured and running before serving the model.
-Real-time serving is useful for integrating machine learning models into production systems, applications, or APIs.
-
-## Step 17: Performing Real-Time Inference with the Deployed Model
-
-In this step, we'll perform real-time inference by sending requests to the deployed model's API endpoint.
-
-### Code (Python):
-
-```python
-import requests
-import json
-
-url = 'http://localhost:5001/invocations'  # Replace with the actual endpoint URL
-
-data_dict = {"dataframe_split": X_test.to_dict(orient='split')}
-
-response = requests.post(url, json=data_dict)
-predictions = response.json()
-
-print(predictions)
+```bash
+python -c "import mlflow, xgboost, sklearn; print(mlflow.__version__, xgboost.__version__, sklearn.__version__)"
 ```
 
-### Explanation:
-We use the requests library to send a POST request to the deployed model's API endpoint.
-The URL should be set to the correct endpoint where the model is served.
-We prepare the input data in the desired format and send it as JSON in the request.
-The response contains the model's predictions, which we extract using response.json().
-Finally, we print the predictions.
-Expected Output:
-The output will be the model's predictions for the input data sent in the request.
+This should print `3.17.1 3.4.1 1.9.1`.
 
-### Note:
-Real-time inference allows you to use the deployed model to make predictions on new data as it becomes available.
-Ensure that the model serving endpoint is running and accessible before making real-time inference requests.
-Replace the endpoint URL with the actual URL where your model is served.
+## Run the whole lab in one command
 
-## Step 18: Cleaning Up and Conclusion
+On macOS, Linux or WSL:
 
-In this final step, we'll wrap up the lab and perform any necessary clean-up tasks.
+```bash
+./run_lab.sh
+```
 
-### Clean-Up Tasks:
+`run_lab.sh` does all of the following:
+- It creates `.venv` and installs the requirements if they aren't there yet, so you can skip Setup.
+- It starts the tracking server on port 8080, or reuses one that's already running.
+- It runs the seven steps below in order, then stops the servers it started.
+- It stops at the first failure.
 
-- **Stop the Model Serving**: If you've started the model serving process, make sure to stop it when you're done with real-time inference. You can do this by stopping the MLflow Model Serving process or using appropriate commands.
+A full run takes about 2 minutes on a laptop, including the install.
 
-- **Close Resources**: Ensure that any resources or connections used during the lab are properly closed or released.
+| Option | Effect |
+|---|---|
+| `./run_lab.sh --fresh` | deletes `mlflow.db`, `mlartifacts/` and `outputs/` first, so the registry starts empty and the output matches the section below |
+| `./run_lab.sh --keep-server` | leaves the tracking server running so you can browse http://127.0.0.1:8080 afterwards |
+| `MAX_EVALS=96 ./run_lab.sh` | number of hyperopt trials (default 32) |
+| `TRACKING_PORT=8090 SERVE_PORT=5002 ./run_lab.sh` | use other ports |
+| `PYTHON=/path/to/python3.12 ./run_lab.sh` | choose the interpreter used to create `.venv` |
 
-- **Save Documentation**: Save this lab documentation for future reference or sharing with others.
+On Windows without WSL, follow the step-by-step commands below in PowerShell. They're the same, apart from activating the venv and running `serve_model.sh`; for that step, see [Troubleshooting](#troubleshooting).
 
-### Conclusion:
+## Run it step by step
 
-In this lab, we've covered various aspects of the machine learning lifecycle, including data preparation, model training, evaluation, deployment, and real-time inference. Here are the key takeaways:
+The step-by-step run uses three terminals. Activate the venv in each one (`source .venv/bin/activate`), from the repository root.
 
-- Data preparation is essential for training and evaluating machine learning models. Cleaning, transforming, and splitting the data are crucial steps.
+**Terminal 1: the tracking server.** It stores runs and the model registry in `mlflow.db` (SQLite) and model files in `mlartifacts/`. The registry needs a database backend; it doesn't work with plain files.
 
-- Model training involves selecting an appropriate algorithm, training the model, and evaluating its performance using relevant metrics.
+```bash
+mlflow server --backend-store-uri sqlite:///mlflow.db --artifacts-destination ./mlartifacts --host 127.0.0.1 --port 8080
+```
 
-- Model deployment involves registering the model, transitioning it to the production stage, and serving it for real-time inference.
+Leave it running and open http://127.0.0.1:8080. The scripts find the server through `MLFLOW_TRACKING_URI`, which defaults to `http://127.0.0.1:8080`.
 
-- Real-time inference allows you to use the deployed model to make predictions on new data as it arrives.
+**Terminal 2: training, registry and batch inference.**
 
-By following these steps, you can effectively develop and deploy machine learning models for various applications.
+```bash
+cd src
+python train_baseline.py                 # 1. random forest baseline
+python register_model.py baseline        # 2. register it; it becomes @champion if it beats the current one
+python tune_xgboost.py --max-evals 32    # 3. seeded hyperopt sweep, one nested run per trial
+python register_model.py best-xgboost    # 4. register the sweep's best model, with the same promotion check
+python batch_inference.py                # 5. score the test set with models:/wine_quality@champion
+```
 
-Thank you for completing this lab!
+**Terminal 3: serve the champion over REST.**
 
+```bash
+./serve_model.sh                         # 6. http://127.0.0.1:5001/invocations
+```
 
+**Back in terminal 2: verify the endpoint.**
 
+```bash
+python score_endpoint.py                 # 7. the served predictions must match the registry model
+```
 
+Stop the servers with Ctrl+C in terminals 1 and 3. Your runs and models stay in `mlflow.db` and `mlartifacts/`; delete those two (and `outputs/`) to start over.
+
+### Registry commands
+
+```bash
+python register_model.py status          # every version with its metrics, promotion result and aliases
+python register_model.py rollback        # point @champion back at @previous-champion
+python register_model.py best-xgboost --min-improvement 0.01   # require a bigger gain to promote
+```
+
+### Calling the endpoint yourself
+
+The server accepts a pandas DataFrame as JSON, in either `dataframe_split` or `dataframe_records` form. It returns `P(high quality)` for each row:
+
+```bash
+curl -s http://127.0.0.1:5001/invocations -H 'Content-Type: application/json' -d '{"dataframe_records": [{
+  "fixed_acidity": 7.0, "volatile_acidity": 0.27, "citric_acid": 0.36, "residual_sugar": 20.7,
+  "chlorides": 0.045, "free_sulfur_dioxide": 45.0, "total_sulfur_dioxide": 170.0, "density": 1.001,
+  "pH": 3.0, "sulphates": 0.45, "alcohol": 8.8, "is_red": 0.0}]}'
+```
+
+The reply looks like `{"predictions": [0.0...]}`. If you leave a column out, the model's signature rejects the request with HTTP 400.
+
+## What a successful run looks like
+
+Here is the output of `./run_lab.sh --fresh` on an empty registry, trimmed. The numbers are reproducible: the data split, the random forest and the hyperopt search are all seeded with 123.
+
+```text
+==> 1/7 Baseline random forest
+Baseline random forest: val AUC = 0.8717, test AUC = 0.8539
+
+==> 2/7 Register the baseline (promotion check against @champion)
+Registered wine_quality v1 (random_forest, run ...) as @challenger
+Promoted v1 to @champion (no champion yet)
+
+==> 3/7 Hyperopt sweep over XGBoost (32 trials, one nested run each)
+Sweep of 32 trials (run ...)
+  best trial 14: val AUC = 0.8972, test AUC = 0.9018
+
+==> 4/7 Register the sweep's best model (promotion check against @champion)
+  challenger v2 val AUC = 0.8972
+  champion   v1 val AUC = 0.8717  (gain +0.0255, need > +0.0000)
+Promoted v2 to @champion (val AUC 0.8972 beats v1 (0.8717))
+
+version  family         val_auc  test_auc  check     aliases
+v1       random_forest  0.8717   0.8539    promoted  @previous-champion
+v2       xgboost        0.8972   0.9018    promoted  @challenger @champion
+
+==> 5/7 Batch inference with models:/wine_quality@champion
+Loaded models:/wine_quality@champion (v2): test AUC = 0.9018
+Wrote 1300 predictions to .../outputs/batch_predictions.csv and logged them to the run
+
+==> 7/7 Check the endpoint against the registry model
+Endpoint http://127.0.0.1:5001/invocations, expected models:/wine_quality@champion (v2, xgboost)
+  batch of 1300 rows: 14 ms, test AUC = 0.9018
+  served vs local predictions: max abs diff = 0.00e+00 -> match
+  50 single-row requests: p50 = 3.9 ms, p95 = 4.5 ms
+  request missing 10 of 12 columns: HTTP 400 -> rejected
+Endpoint check passed.
+```
+
+Latencies depend on your machine. Everything else should match. The original notebook's baseline scored a test AUC of 0.854, which the ported baseline reproduces.
+
+If you run it again without `--fresh`, the new versions go through the same promotion check against the current champion:
+- The repeat baseline (val AUC 0.8717) is registered and rejected, so `@champion` doesn't move.
+- The repeat sweep finds the same configuration. It has the same validation AUC, not a higher one, so it is rejected as well.
+
+**In the MLflow UI** (http://127.0.0.1:8080):
+
+- **Experiments → wine-quality** has a description and tags. Its runs are:
+  - `untuned_random_forest`
+  - `xgboost_models`, which expands into 32 `trial-NNN` child runs
+  - `batch_inference`
+  - `endpoint_check`
+
+  Filter them with tags, e.g. `tags.pipeline_step = 'tuning_trial'`.
+- **A training run's** Overview shows its params, its tags (`pipeline_step`, `model_family`, `data_version`) and its training/validation/test dataset inputs. Its Model metrics show `val_*` and `test_*` AUC, log loss, accuracy, precision, recall and F1.
+  - Artifacts holds `plots/` (ROC curves, confusion matrices, feature importance) and the logged model.
+  - On `xgboost_models` there is also `sweep/`: the search space, a table of every trial, the optimisation history and validation AUC by each hyperparameter.
+- **Models → wine_quality** has a description. Each version carries tags (family, data version, val/test AUC, `promotion_check`), a description saying why it was promoted or rejected, and its aliases.
+
+## What changed from the original lab
+
+| Area | Original lab | This version | MLflow concept |
+|---|---|---|---|
+| Environment | Databricks notebook; needs Spark (`SparkTrials`, `spark_udf`); unpinned requirements apart from xgboost 1.7.6 | Python scripts in `src/` against a local `mlflow server` with a SQLite backend and an artifact store; every package pinned | Tracking server, backend and artifact stores |
+| Tracking | One `auc` metric per run, written into the default experiment | A named experiment with a description and tags. Each run is tagged with its pipeline step, model family and a hash of the data files. It logs the train/val/test splits as dataset inputs, val and test metrics, ROC curves, confusion matrices and feature importance | Experiments, tags, dataset lineage, logged artifacts |
+| Baseline model | A wrapper class defined in the notebook and saved with cloudpickle | The model is defined in `wine_model.py` and logged from that file ("models from code"), with the forest attached as an artifact. It has a signature and an input example | pyfunc models from code, signatures |
+| Hyperparameter tuning | 96 unseeded `SparkTrials` trials; autolog saves a full model for every trial | A seeded TPE search: the same seed gives the same best parameters. Each trial is a nested run that logs only its params and metrics. The parent run gets a summary of the sweep pulled back with `search_runs`, and the best configuration is refit once and logged as the sweep's single model | Nested runs, `search_runs`, reproducibility |
+| Registry | Versions moved by hand to the `Production` / `Archived` stages, which MLflow 3 deprecates. The new model is promoted without checking whether it is better | `@champion`, `@challenger` and `@previous-champion` aliases. A new version is promoted only if its validation AUC beats the champion's, both loaded back from the registry. Test AUC is recorded but never used to choose, so the test set stays a fair estimate. The decision is recorded on the version. `rollback` undoes a promotion, and re-registering the same run is refused | Model aliases, version tags and descriptions, promotion gate |
+| Batch inference | `spark_udf` on `models:/wine_quality/production` | Loads `models:/wine_quality@champion` in a tracked run, which records the model version and source run and saves the predictions as an artifact | Inference lineage |
+| Serving | `mlflow models serve` on the `production` stage; the response is printed | `serve_model.sh` serves `@champion`. `score_endpoint.py` checks that the served predictions match the same registry version loaded locally, measures latency, confirms that malformed requests are rejected by the signature, and logs the check as a run | Model serving, signature enforcement |
+| Automation | Manual notebook cells | `run_lab.sh` runs everything from install to endpoint check and fails loudly at the first error | Reproducible pipeline |
+
+## Project layout
+
+```text
+MLOps-Lab3/
+├── run_lab.sh              whole lab end to end
+├── serve_model.sh          mlflow models serve for a registry alias
+├── requirements.txt        pinned dependencies
+├── data/                   UCI wine quality CSVs and the dataset description
+├── src/
+│   ├── common.py           tracking URI, experiment and model names
+│   ├── data.py             loading, target definition, seeded 60/20/20 split, data version hash
+│   ├── tracking.py         helpers for tags, dataset inputs, metrics and plots
+│   ├── wine_model.py       pyfunc wrapper for the random forest (models from code)
+│   ├── train_baseline.py   step 1
+│   ├── register_model.py   steps 2 and 4, plus status and rollback
+│   ├── tune_xgboost.py     step 3
+│   ├── batch_inference.py  step 5
+│   └── score_endpoint.py   step 7
+├── starter.ipynb           original notebook (unchanged)
+├── ORIGINAL_LAB.md         original write-up (unchanged)
+└── Wine Quality Prediction Lab Documentation.pdf
+```
+
+Files created at run time are git-ignored: `.venv/`, `mlflow.db`, `mlartifacts/`, and `outputs/`, which holds the batch predictions and the `run_lab.sh` server logs.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `No MLflow tracking server at http://127.0.0.1:8080` | Start the tracking server (terminal 1 in [Run it step by step](#run-it-step-by-step)), or use `./run_lab.sh` |
+| Why port 8080 and not MLflow's default 5000? | macOS uses port 5000 for AirPlay Receiver |
+| `uvicorn: not found` from `mlflow models serve` | The venv isn't active. Run `source .venv/bin/activate`, or use `./serve_model.sh`, which activates it |
+| `score_endpoint.py` reports `MISMATCH` | The server is serving a different version from the alias you're checking. The alias is resolved once, when the server starts, so restart `./serve_model.sh` after a promotion or rollback |
+| `Port 5001 is already in use` | An old model server is still running. Stop it, or use `SERVE_PORT=5002 ./run_lab.sh` |
+| `Run ... is already registered` | That run already has a version. Train a new one first (`train_baseline.py` or `tune_xgboost.py`) |
+| `pip install` can't find numpy 2.5.4 or xgboost 3.4.1 | The venv uses Python older than 3.12. Delete `.venv` and recreate it with `python3.12 -m venv .venv` |
+| `./run_lab.sh: Permission denied` | `chmod +x run_lab.sh serve_model.sh`, or run `bash run_lab.sh` |
+| Windows: serving without bash | In an activated PowerShell venv, set `$env:MLFLOW_TRACKING_URI="http://127.0.0.1:8080"`, then run `mlflow models serve -m "models:/wine_quality@champion" --env-manager local -h 127.0.0.1 -p 5001` |
