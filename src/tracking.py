@@ -6,10 +6,17 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import tempfile
+from pathlib import Path
+
+import joblib
 import matplotlib.pyplot as plt
 import mlflow
 import mlflow.data
+import mlflow.pyfunc
 import pandas as pd
+import sklearn
+from mlflow.models import infer_signature
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     RocCurveDisplay,
@@ -21,9 +28,10 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from data import TARGET, data_version
+from data import CLASS_LABELS, TARGET, data_version
 
-DATA_SOURCE_URL = "https://archive.ics.uci.edu/dataset/186/wine+quality"
+DATA_SOURCE_URL = "https://archive.ics.uci.edu/dataset/2/adult"
+MODEL_CODE = Path(__file__).resolve().parent / "proba_model.py"
 
 
 def set_run_tags(pipeline_step, model_family):
@@ -45,7 +53,7 @@ def log_datasets(**splits):
                 df,
                 source=DATA_SOURCE_URL,
                 targets=TARGET,
-                name=f"wine-quality-{context}",
+                name=f"adult-income-{context}",
             )
             mlflow.log_input(dataset, context=context)
 
@@ -72,7 +80,7 @@ def log_classification_eval(y_true, scores, split_name="test", threshold=0.5):
 
     fig, ax = plt.subplots(figsize=(5, 5))
     ConfusionMatrixDisplay.from_predictions(
-        y_true, labels, display_labels=["not high", "high"], ax=ax, colorbar=False
+        y_true, labels, display_labels=CLASS_LABELS, ax=ax, colorbar=False
     )
     ax.set_title(f"Confusion matrix ({split_name}, threshold {threshold})")
     mlflow.log_figure(fig, f"plots/confusion_matrix_{split_name}.png")
@@ -81,7 +89,35 @@ def log_classification_eval(y_true, scores, split_name="test", threshold=0.5):
     return metrics
 
 
-def log_feature_importance(importances, feature_names):
+def log_slice_metrics(y_true, scores, groups, split_name="test", threshold=0.5):
+    """Metrics per value of each sensitive attribute, e.g. test AUC for sex=Female, logged as a table
+    plus the largest gap between groups for each attribute."""
+    frame = groups.assign(y=y_true.to_numpy(), score=scores, label=(scores >= threshold).astype(int))
+    rows = []
+    for column in groups.columns:
+        for value, group in frame.groupby(column):
+            rows.append({
+                "attribute": column,
+                "group": value,
+                "rows": len(group),
+                "actual_positive_rate": group["y"].mean(),
+                "predicted_positive_rate": group["label"].mean(),
+                "auc": roc_auc_score(group["y"], group["score"]) if group["y"].nunique() == 2 else float("nan"),
+                "true_positive_rate": recall_score(group["y"], group["label"], zero_division=0),
+            })
+    table = pd.DataFrame(rows)
+    mlflow.log_table(table, f"slices/{split_name}_slices.json")
+
+    gaps = {}
+    for column, group in table.groupby("attribute"):
+        large = group[group["rows"] >= 100]  # tiny groups make the gaps meaningless
+        for metric in ["auc", "predicted_positive_rate", "true_positive_rate"]:
+            gaps[f"{split_name}_{metric}_gap_{column}"] = large[metric].max() - large[metric].min()
+    mlflow.log_metrics(gaps)
+    return table, gaps
+
+
+def log_feature_importance(importances, feature_names, top_n=20):
     table = (
         pd.DataFrame({"feature": feature_names, "importance": importances})
         .sort_values("importance", ascending=False)
@@ -89,11 +125,32 @@ def log_feature_importance(importances, feature_names):
     )
     mlflow.log_table(table, "feature_importance.json")
 
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    ax.barh(table["feature"][::-1], table["importance"][::-1])
+    top = table.head(top_n)
+    fig, ax = plt.subplots(figsize=(6, max(3, 0.25 * len(top) + 1)))
+    ax.barh(top["feature"][::-1], top["importance"][::-1])
     ax.set_xlabel("importance")
-    ax.set_title("Feature importance")
+    ax.set_title("Feature importance" if len(table) <= top_n else f"Feature importance (top {top_n})")
     fig.tight_layout()
     mlflow.log_figure(fig, "plots/feature_importance.png")
     plt.close(fig)
     return table
+
+
+def log_proba_model(pipeline, X_train, extra_requirements=()):
+    """Log a fitted scikit-learn pipeline as a pyfunc model (from proba_model.py) that returns P(income > 50K)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "pipeline.joblib"
+        joblib.dump(pipeline, path)
+        return mlflow.pyfunc.log_model(
+            name="model",
+            python_model=str(MODEL_CODE),
+            artifacts={"sklearn_pipeline": str(path)},
+            pip_requirements=[
+                f"scikit-learn=={sklearn.__version__}",
+                f"joblib=={joblib.__version__}",
+                f"mlflow=={mlflow.__version__}",
+                *extra_requirements,
+            ],
+            signature=infer_signature(X_train, pipeline.predict_proba(X_train)[:, 1]),
+            input_example=X_train.head(5),
+        )

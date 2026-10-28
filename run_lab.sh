@@ -98,7 +98,12 @@ python --version
 
 step "Installing pinned requirements"
 python -m pip install --quiet --disable-pip-version-check -r requirements.txt
-python -c 'import mlflow, xgboost, sklearn, hyperopt; print(f"mlflow {mlflow.__version__}, xgboost {xgboost.__version__}, scikit-learn {sklearn.__version__}, hyperopt {hyperopt.__version__}")'
+# LightGBM's macOS wheel needs the OpenMP runtime from Homebrew; without it the import fails
+if ! python -c 'import lightgbm' 2>/dev/null; then
+    echo "lightgbm is installed but won't load. On macOS run: brew install libomp   (Linux: sudo apt install libgomp1)" >&2
+    exit 1
+fi
+python -c 'import mlflow, lightgbm, sklearn, hyperopt; print(f"mlflow {mlflow.__version__}, lightgbm {lightgbm.__version__}, scikit-learn {sklearn.__version__}, hyperopt {hyperopt.__version__}")'
 
 if $FRESH; then
     if curl -sf "$MLFLOW_TRACKING_URI/health" >/dev/null 2>&1; then
@@ -127,22 +132,22 @@ fi
 
 cd src
 
-step "1/7 Baseline random forest"
+step "1/7 Baseline logistic regression"
 python train_baseline.py
 
 step "2/7 Register the baseline (promotion check against @champion)"
 python register_model.py baseline
 
-step "3/7 Hyperopt sweep over XGBoost ($MAX_EVALS trials, one nested run each)"
-python tune_xgboost.py --max-evals "$MAX_EVALS"
+step "3/7 Hyperopt sweep over LightGBM ($MAX_EVALS trials, one nested run each)"
+python tune_lightgbm.py --max-evals "$MAX_EVALS"
 
 step "4/7 Register the sweep's best model (promotion check against @champion)"
-python register_model.py best-xgboost
+python register_model.py best-lightgbm
 
-step "5/7 Batch inference with models:/wine_quality@champion"
+step "5/7 Batch inference with models:/adult_income@champion"
 python batch_inference.py
 
-step "6/7 Serve models:/wine_quality@champion on http://127.0.0.1:$SERVE_PORT"
+step "6/7 Serve models:/adult_income@champion on http://127.0.0.1:$SERVE_PORT"
 if port_in_use "$SERVE_PORT"; then
     echo "Port $SERVE_PORT is already in use (an old model server?). Stop it or use SERVE_PORT=<free port>." >&2
     exit 1
@@ -157,7 +162,7 @@ python score_endpoint.py --url "http://127.0.0.1:$SERVE_PORT"
 
 step "Done"
 if $KEEP_SERVER || [ -z "$TRACKING_PID" ]; then
-    echo "MLflow UI: $MLFLOW_TRACKING_URI  (experiment 'wine-quality', model 'wine_quality')"
+    echo "MLflow UI: $MLFLOW_TRACKING_URI  (experiment 'adult-income', model 'adult_income')"
 else
     echo "The tracking server will now stop. Rerun with --keep-server, or start it as in the README, to browse the UI."
 fi

@@ -15,7 +15,7 @@ import requests
 from mlflow.tracking import MlflowClient
 
 from common import MODEL_NAME, connect
-from data import load_wine_data, split
+from data import load_adult_data, split
 from tracking import log_classification_eval, set_run_tags
 
 SINGLE_REQUESTS = 50
@@ -48,7 +48,7 @@ def main():
     args = parser.parse_args()
 
     connect()
-    X_train, X_val, X_test, y_train, y_val, y_test = split(load_wine_data())
+    X_train, X_val, X_test, y_train, y_val, y_test = split(load_adult_data())
     wait_for_server(args.url, args.wait)
 
     model_uri = f"models:/{MODEL_NAME}@{args.alias}"
@@ -67,7 +67,7 @@ def main():
         matches = served_scores.shape == local_scores.shape and max_diff <= TOLERANCE
         metrics = log_classification_eval(y_test, served_scores, "test")
 
-        # 2. One wine per request, "records" orientation, the way a real-time caller would use it
+        # 2. One person per request, "records" orientation, the way a real-time caller would use it
         latencies = []
         for _, row in X_test.head(SINGLE_REQUESTS).iterrows():
             single, ms = invoke(args.url, {"dataframe_records": [row.to_dict()]})
@@ -77,7 +77,7 @@ def main():
         p95 = float(np.percentile(latencies, 95))
 
         # 3. A request missing columns must be rejected by the model signature, not scored
-        bad, _ = invoke(args.url, {"dataframe_split": X_test[["alcohol", "pH"]].head(1).to_dict(orient="split")})
+        bad, _ = invoke(args.url, {"dataframe_split": X_test.iloc[:1, :2].to_dict(orient="split")})
         rejects_bad_input = bad.status_code == 400
 
         mlflow.log_metrics({

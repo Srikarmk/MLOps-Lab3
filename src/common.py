@@ -5,12 +5,12 @@ import requests
 from mlflow.tracking import MlflowClient
 
 TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:8080")
-EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "wine-quality")
-MODEL_NAME = os.getenv("MODEL_NAME", "wine_quality")
+EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "adult-income")
+MODEL_NAME = os.getenv("MODEL_NAME", "adult_income")
 
 EXPERIMENT_DESCRIPTION = (
-    "Binary classification of high-quality wines (quality >= 7) from the UCI Wine Quality "
-    "red and white datasets. Random forest baseline vs. a hyperopt-tuned XGBoost sweep."
+    "Binary classification of whether a person earns more than $50K a year, from the UCI Adult (1994 US census) "
+    "dataset. Logistic regression baseline vs. a hyperopt-tuned LightGBM sweep, with metrics per sex and race."
 )
 
 
@@ -30,5 +30,5 @@ def connect():
         client = MlflowClient()
         client.set_experiment_tag(experiment.experiment_id, "mlflow.note.content", EXPERIMENT_DESCRIPTION)
         client.set_experiment_tag(experiment.experiment_id, "task", "binary-classification")
-        client.set_experiment_tag(experiment.experiment_id, "target", "quality >= 7")
+        client.set_experiment_tag(experiment.experiment_id, "target", "income > 50K")
     return experiment

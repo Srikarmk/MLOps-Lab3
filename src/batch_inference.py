@@ -5,15 +5,16 @@ import mlflow.pyfunc
 from mlflow.tracking import MlflowClient
 
 from common import MODEL_NAME, connect
-from data import load_wine_data, split
-from tracking import log_classification_eval, log_datasets, set_run_tags
+from data import load_adult_data, slice_groups, split
+from tracking import log_classification_eval, log_datasets, log_slice_metrics, set_run_tags
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "outputs"
 
 
 def main():
     connect()
-    X_train, X_val, X_test, y_train, y_val, y_test = split(load_wine_data())
+    data = load_adult_data()
+    X_train, X_val, X_test, y_train, y_val, y_test = split(data)
 
     model_uri = f"models:/{MODEL_NAME}@champion"
     version = MlflowClient().get_model_version_by_alias(MODEL_NAME, "champion")
@@ -31,6 +32,7 @@ def main():
 
         scores = model.predict(X_test)
         metrics = log_classification_eval(y_test, scores, "test")
+        log_slice_metrics(y_test, scores, slice_groups(data, X_test), "test")
 
         OUTPUT_DIR.mkdir(exist_ok=True)
         out_path = OUTPUT_DIR / "batch_predictions.csv"

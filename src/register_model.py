@@ -1,7 +1,7 @@
 """Register models and manage them with registry aliases instead of the deprecated stages.
 
     python register_model.py baseline        register the latest baseline, then run the promotion check
-    python register_model.py best-xgboost    register the latest sweep's best model, then run the promotion check
+    python register_model.py best-lightgbm    register the latest sweep's best model, then run the promotion check
     python register_model.py rollback        point @champion back at @previous-champion
     python register_model.py status          show every version and its aliases
 
@@ -20,17 +20,17 @@ from mlflow.tracking import MlflowClient
 from sklearn.metrics import roc_auc_score
 
 from common import MODEL_NAME, connect
-from data import load_wine_data, split
+from data import load_adult_data, split
 
 CHAMPION, CHALLENGER, PREVIOUS = "champion", "challenger", "previous-champion"
 MODEL_DESCRIPTION = (
-    "Predicts the probability that a wine is high quality (quality >= 7) from 11 physicochemical "
-    "measurements plus an is_red flag. Output: P(high quality) between 0 and 1."
+    "Predicts the probability that a person earns more than $50K a year from 5 numeric and 5 categorical census "
+    "fields (raw values; encoding is part of the model). sex and race are not inputs. Output: P(income > 50K)."
 )
 
 SOURCES = {
     "baseline": "tags.pipeline_step = 'baseline'",
-    "best-xgboost": "tags.pipeline_step = 'tuning'",
+    "best-lightgbm": "tags.pipeline_step = 'tuning'",
 }
 
 
@@ -49,7 +49,7 @@ def describe_registered_model(client):
     model = client.get_registered_model(MODEL_NAME)
     if not model.description:
         client.update_registered_model(MODEL_NAME, description=MODEL_DESCRIPTION)
-        for key, value in {"task": "binary-classification", "target": "quality >= 7", "dataset": "UCI wine quality"}.items():
+        for key, value in {"task": "binary-classification", "target": "income > 50K", "dataset": "UCI Adult"}.items():
             client.set_registered_model_tag(MODEL_NAME, key, value)
 
 
@@ -80,7 +80,7 @@ def register(client, which, min_improvement):
 
 
 def promote_if_better(client, challenger, min_improvement):
-    X_train, X_val, X_test, y_train, y_val, y_test = split(load_wine_data())
+    X_train, X_val, X_test, y_train, y_val, y_test = split(load_adult_data())
     champion = alias_version(client, CHAMPION)
 
     # Both models are loaded from the registry and compared on the validation set. The test set is only
@@ -127,16 +127,16 @@ def status(client):
     for alias, version in model.aliases.items():
         aliases.setdefault(version, []).append(f"@{alias}")
     print(f"{MODEL_NAME}: {model.description}")
-    print(f"{'version':<8} {'family':<14} {'val_auc':<8} {'test_auc':<9} {'check':<9} aliases")
+    print(f"{'version':<8} {'family':<20} {'val_auc':<8} {'test_auc':<9} {'check':<9} aliases")
     for v in sorted(client.search_model_versions(f"name = '{MODEL_NAME}'"), key=lambda v: int(v.version)):
         t = v.tags
-        print(f"v{v.version:<7} {t.get('model_family', ''):<14} {t.get('val_auc', ''):<8} {t.get('test_auc', ''):<9} "
+        print(f"v{v.version:<7} {t.get('model_family', ''):<20} {t.get('val_auc', ''):<8} {t.get('test_auc', ''):<9} "
               f"{t.get('promotion_check', ''):<9} {' '.join(aliases.get(v.version, []))}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Model registry with champion/challenger aliases")
-    parser.add_argument("action", choices=["baseline", "best-xgboost", "rollback", "status"])
+    parser.add_argument("action", choices=["baseline", "best-lightgbm", "rollback", "status"])
     parser.add_argument("--min-improvement", type=float, default=0.0,
                         help="validation AUC the challenger must gain over the champion to be promoted")
     args = parser.parse_args()

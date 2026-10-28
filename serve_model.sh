@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Serves a registered model version over REST with `mlflow models serve`.
 #
-#   ./serve_model.sh                 serve models:/wine_quality@champion on http://127.0.0.1:5001
+#   ./serve_model.sh                 serve models:/adult_income@champion on http://127.0.0.1:5001
 #   ./serve_model.sh challenger      serve @challenger instead
 #   PORT=5002 ./serve_model.sh       use another port
 #
@@ -12,7 +12,7 @@ set -euo pipefail
 ALIAS="${1:-champion}"
 PORT="${PORT:-5001}"
 HOST="${HOST:-127.0.0.1}"
-MODEL_NAME="${MODEL_NAME:-wine_quality}"
+MODEL_NAME="${MODEL_NAME:-adult_income}"
 export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-http://127.0.0.1:8080}"
 export MLFLOW_ENABLE_ARTIFACTS_PROGRESS_BAR=false
 
