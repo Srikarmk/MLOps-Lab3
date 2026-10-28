@@ -15,8 +15,8 @@ def main():
     connect()
     X_train, X_val, X_test, y_train, y_val, y_test = split(load_wine_data())
 
-    model_uri = f"models:/{MODEL_NAME}/production"
-    version = MlflowClient().get_latest_versions(MODEL_NAME, stages=["Production"])[0]
+    model_uri = f"models:/{MODEL_NAME}@champion"
+    version = MlflowClient().get_model_version_by_alias(MODEL_NAME, "champion")
     model = mlflow.pyfunc.load_model(model_uri)
 
     # Scoring is a tracked run too, so every prediction file can be traced back to a model version and dataset

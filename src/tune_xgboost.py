@@ -150,12 +150,13 @@ def main():
         gain = booster.get_score(importance_type="gain")
         log_feature_importance([gain.get(c, 0.0) for c in X_train.columns], X_train.columns)
 
-        mlflow.xgboost.log_model(
+        model_info = mlflow.xgboost.log_model(
             booster,
             name="model",
             signature=infer_signature(X_train, booster.predict(train)),
             input_example=X_train.head(5),
         )
+        mlflow.set_tag("model_uri", model_info.model_uri)
 
     print(f"Sweep of {args.max_evals} trials (run {parent.info.run_id})")
     print(f"  best trial {int(best_trial['trial_number'])}: val AUC = {val_metrics['val_auc']:.4f}, "

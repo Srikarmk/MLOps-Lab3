@@ -12,10 +12,11 @@
 > # terminal 2
 > cd src
 > python train_baseline.py                 # random forest baseline
-> python register_model.py baseline        # register it as wine_quality v1 -> Production
+> python register_model.py baseline        # register it; becomes @champion if it beats the current one
 > python tune_xgboost.py --max-evals 32    # hyperopt sweep, one child run per trial
-> python register_model.py best-xgboost    # register the best trial, archive the old version
-> python batch_inference.py                # score the test set with the Production model
+> python register_model.py best-xgboost    # register the sweep's best model, same promotion check
+> python register_model.py status          # versions and their @champion / @challenger aliases
+> python batch_inference.py                # score the test set with models:/wine_quality@champion
 > ```
 
 # Wine Quality Prediction Lab Documentation

@@ -1,7 +1,10 @@
+import tempfile
+from pathlib import Path
+
+import joblib
 import mlflow
 import mlflow.pyfunc
 import numpy as np
-import pandas as pd
 import sklearn
 from mlflow.models import infer_signature
 from sklearn.ensemble import RandomForestClassifier
@@ -11,16 +14,7 @@ from data import load_wine_data, split
 from tracking import log_classification_eval, log_datasets, log_feature_importance, set_run_tags
 
 SEED = 123
-
-
-class SklearnModelWrapper(mlflow.pyfunc.PythonModel):
-    """Makes the logged model return P(high quality) instead of a 0/1 label."""
-
-    def __init__(self, model):
-        self.model = model
-
-    def predict(self, context, model_input: pd.DataFrame, params=None):
-        return self.model.predict_proba(model_input)[:, 1]
+MODEL_CODE = Path(__file__).resolve().parent / "wine_model.py"
 
 
 def main():
@@ -41,14 +35,22 @@ def main():
         test_metrics = log_classification_eval(y_test, model.predict_proba(X_test)[:, 1], "test")
         log_feature_importance(model.feature_importances_, X_train.columns)
 
-        wrapped = SklearnModelWrapper(model)
-        mlflow.pyfunc.log_model(
-            name="random_forest_model",
-            python_model=wrapped,
-            pip_requirements=[f"scikit-learn=={sklearn.__version__}", f"mlflow=={mlflow.__version__}"],
-            signature=infer_signature(X_train, wrapped.predict(None, X_train)),
-            input_example=X_train.head(5),
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "random_forest.joblib"
+            joblib.dump(model, model_path)
+            model_info = mlflow.pyfunc.log_model(
+                name="random_forest_model",
+                python_model=str(MODEL_CODE),
+                artifacts={"sklearn_model": str(model_path)},
+                pip_requirements=[
+                    f"scikit-learn=={sklearn.__version__}",
+                    f"joblib=={joblib.__version__}",
+                    f"mlflow=={mlflow.__version__}",
+                ],
+                signature=infer_signature(X_train, model.predict_proba(X_train)[:, 1]),
+                input_example=X_train.head(5),
+            )
+        mlflow.set_tag("model_uri", model_info.model_uri)
 
     print(f"Baseline random forest: val AUC = {val_metrics['val_auc']:.4f}, test AUC = {test_metrics['test_auc']:.4f}")
     print(f"Run ID: {run.info.run_id}")
