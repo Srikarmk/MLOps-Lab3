@@ -26,7 +26,8 @@ def main():
         run_id = latest_run_id('tags.mlflow.runName = "untuned_random_forest"', ["attributes.start_time DESC"])
         source = f"runs:/{run_id}/random_forest_model"
     else:
-        run_id = latest_run_id("tags.mlflow.parentRunId != ''", ["metrics.auc DESC"])
+        # The sweep's parent run holds the refit best model
+        run_id = latest_run_id("tags.pipeline_step = 'tuning'", ["attributes.start_time DESC"])
         source = f"runs:/{run_id}/model"
 
     previous = client.get_latest_versions(MODEL_NAME, stages=["Production"]) if client.search_registered_models(
