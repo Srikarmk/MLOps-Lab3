@@ -41,8 +41,8 @@ def alias_version(client, alias):
         return None
 
 
-def test_auc(model_uri, X_test, y_test):
-    return roc_auc_score(y_test, mlflow.pyfunc.load_model(model_uri).predict(X_test))
+def registry_auc(model_uri, X, y):
+    return roc_auc_score(y, mlflow.pyfunc.load_model(model_uri).predict(X))
 
 
 def describe_registered_model(client):
@@ -83,19 +83,20 @@ def promote_if_better(client, challenger, min_improvement):
     X_train, X_val, X_test, y_train, y_val, y_test = split(load_wine_data())
     champion = alias_version(client, CHAMPION)
 
-    # Both models are loaded from the registry and scored on the same held-out test set
-    challenger_auc = test_auc(f"models:/{MODEL_NAME}/{challenger.version}", X_test, y_test)
+    # Both models are loaded from the registry and compared on the validation set. The test set is only
+    # reported: choosing between models by test AUC would make it part of model selection.
+    challenger_auc = registry_auc(f"models:/{MODEL_NAME}/{challenger.version}", X_val, y_val)
     if champion is None:
         decision, reason = "promoted", "no champion yet"
     else:
-        champion_auc = test_auc(f"models:/{MODEL_NAME}@{CHAMPION}", X_test, y_test)
+        champion_auc = registry_auc(f"models:/{MODEL_NAME}@{CHAMPION}", X_val, y_val)
         gain = challenger_auc - champion_auc
-        print(f"  challenger v{challenger.version} test AUC = {challenger_auc:.4f}")
-        print(f"  champion   v{champion.version} test AUC = {champion_auc:.4f}  (gain {gain:+.4f}, need > {min_improvement:+.4f})")
+        print(f"  challenger v{challenger.version} val AUC = {challenger_auc:.4f}")
+        print(f"  champion   v{champion.version} val AUC = {champion_auc:.4f}  (gain {gain:+.4f}, need > {min_improvement:+.4f})")
         if gain > min_improvement:
-            decision, reason = "promoted", f"test AUC {challenger_auc:.4f} beats v{champion.version} ({champion_auc:.4f})"
+            decision, reason = "promoted", f"val AUC {challenger_auc:.4f} beats v{champion.version} ({champion_auc:.4f})"
         else:
-            decision, reason = "rejected", f"test AUC {challenger_auc:.4f} does not beat v{champion.version} ({champion_auc:.4f})"
+            decision, reason = "rejected", f"val AUC {challenger_auc:.4f} does not beat v{champion.version} ({champion_auc:.4f})"
 
     client.set_model_version_tag(MODEL_NAME, challenger.version, "promotion_check", decision)
     client.update_model_version(MODEL_NAME, challenger.version, description=f"Promotion check {decision}: {reason}.")
@@ -137,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser(description="Model registry with champion/challenger aliases")
     parser.add_argument("action", choices=["baseline", "best-xgboost", "rollback", "status"])
     parser.add_argument("--min-improvement", type=float, default=0.0,
-                        help="test AUC the challenger must gain over the champion to be promoted")
+                        help="validation AUC the challenger must gain over the champion to be promoted")
     args = parser.parse_args()
 
     connect()
