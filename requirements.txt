@@ -6,3 +6,4 @@ hyperopt==0.3.0
 pandas==3.0.6
 numpy==2.5.4
 matplotlib==3.11.2
+requests==2.34.2

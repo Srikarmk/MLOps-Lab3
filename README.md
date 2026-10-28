@@ -17,6 +17,12 @@
 > python register_model.py best-xgboost    # register the sweep's best model, same promotion check
 > python register_model.py status          # versions and their @champion / @challenger aliases
 > python batch_inference.py                # score the test set with models:/wine_quality@champion
+>
+> # terminal 3: REST endpoint for @champion at http://127.0.0.1:5001/invocations
+> ./serve_model.sh
+>
+> # back in terminal 2
+> python score_endpoint.py                 # served predictions must match the model loaded locally
 > ```
 
 # Wine Quality Prediction Lab Documentation
