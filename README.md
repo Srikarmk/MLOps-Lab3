@@ -87,7 +87,7 @@ Check the install:
 python -c "import mlflow, lightgbm, sklearn; print(mlflow.__version__, lightgbm.__version__, sklearn.__version__)"
 ```
 
-This should print `3.17.1 4.7.0 1.9.1`.
+This should print `3.17.1 4.7.0 1.9.1`. MLflow 3.17 may first print an `INFO mlflow.agent.hint` line about a "tracing skill". That's MLflow's own message for AI coding assistants and has nothing to do with this lab. Ignore it, or silence it with `export MLFLOW_DISABLE_AGENT_HINT=1` (PowerShell: `$env:MLFLOW_DISABLE_AGENT_HINT="1"`). `run_lab.sh` sets this for you.
 
 ## Run the whole lab in one command
 
