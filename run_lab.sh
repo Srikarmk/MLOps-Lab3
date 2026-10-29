@@ -37,12 +37,30 @@ SERVE_PID=""
 step() { printf '\n==> %s\n' "$*"; }
 
 # mlflow starts uvicorn as a child process, so stop the whole tree, not just the PID we launched
-stop_tree() {
+STOPPED_PIDS=()
+signal_tree() {
     local pid="$1" child
     for child in $(pgrep -P "$pid" 2>/dev/null); do
-        stop_tree "$child"
+        signal_tree "$child"
     done
     kill "$pid" 2>/dev/null || true
+    STOPPED_PIDS+=("$pid")
+}
+
+# kill only asks the servers to exit; wait (up to 10s) until they have, so the ports are free on return
+stop_tree() {
+    local pid
+    STOPPED_PIDS=()
+    signal_tree "$1"
+    for _ in $(seq 1 20); do
+        for pid in "${STOPPED_PIDS[@]}"; do
+            kill -0 "$pid" 2>/dev/null && break
+            pid=""
+        done
+        [ -z "$pid" ] && return 0
+        sleep 0.5
+    done
+    kill -9 "${STOPPED_PIDS[@]}" 2>/dev/null || true
 }
 
 cleanup() {
@@ -123,9 +141,14 @@ else
         echo "Port $TRACKING_PORT is taken by something that isn't an MLflow server. Use TRACKING_PORT=<free port>." >&2
         exit 1
     fi
+    # set -m starts the server in its own process group, so Ctrl+C reaches only the current step. That step
+    # can still close its MLflow run, then cleanup stops the server. disown keeps bash quiet when it exits.
+    set -m
     mlflow server --backend-store-uri sqlite:///mlflow.db --artifacts-destination ./mlartifacts \
         --host 127.0.0.1 --port "$TRACKING_PORT" > "$LOG_DIR/tracking-server.log" 2>&1 &
     TRACKING_PID=$!
+    set +m
+    disown "$TRACKING_PID"
     wait_for "$MLFLOW_TRACKING_URI/health" 90 "The tracking server" "$LOG_DIR/tracking-server.log"
     echo "Started (PID $TRACKING_PID, log: outputs/logs/tracking-server.log)"
 fi
@@ -152,8 +175,11 @@ if port_in_use "$SERVE_PORT"; then
     echo "Port $SERVE_PORT is already in use (an old model server?). Stop it or use SERVE_PORT=<free port>." >&2
     exit 1
 fi
+set -m  # own process group, as for the tracking server
 PORT="$SERVE_PORT" "$ROOT/serve_model.sh" > "$LOG_DIR/model-server.log" 2>&1 &
 SERVE_PID=$!
+set +m
+disown "$SERVE_PID"
 wait_for "http://127.0.0.1:$SERVE_PORT/ping" 90 "The model server" "$LOG_DIR/model-server.log"
 echo "Started (PID $SERVE_PID, log: outputs/logs/model-server.log)"
 
